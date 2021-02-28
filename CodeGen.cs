@@ -61,7 +61,7 @@ namespace RestServiceProvider
         {
             var SourceType = O.GetType();
             var Code = BuildServiceCode(SourceType);
-            var Asm = CompileGrpcServiceSources(Code, SourceType);
+            var Asm = CompileRestServiceSources(Code, SourceType);
             return Activator.CreateInstance(Asm.ExportedTypes.First(), new object[] { O });
         }
 
@@ -108,7 +108,7 @@ namespace RestServiceProvider
             sf = sf.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Collections")));
             sf = sf.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("Newtonsoft.Json")));
             sf = sf.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Collections.Generic")));
-            sf = sf.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName(T.Name)));
+            sf = sf.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName(T.Namespace)));
 
 
             var ns = SyntaxFactory.NamespaceDeclaration(SyntaxFactory.ParseName(T.Name + "RestService")).NormalizeWhitespace();
@@ -267,7 +267,7 @@ namespace RestServiceProvider
         /// <param name="Source">Source code to compile</param>
         /// <param name="TypeToWrap">Type to be wrapped</param>
         /// <returns></returns>
-        public static Assembly CompileGrpcServiceSources(string Source, Type TypeToWrap)
+        public static Assembly CompileRestServiceSources(string Source, Type TypeToWrap)
         {
 
 #if DEBUG
@@ -288,10 +288,20 @@ namespace RestServiceProvider
             references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Threading.Tasks").Location));
             references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Collections").Location));
             references.Add(MetadataReference.CreateFromFile(typeof(string).GetTypeInfo().Assembly.Location));
-
+      
 
             //Adds reference to our original class from which we create service
             references.Add(MetadataReference.CreateFromFile(TypeToWrap.Assembly.Location));
+
+            foreach(var reference in TypeToWrap.Assembly.GetReferencedAssemblies())
+            {
+                var referencedAsm = AppDomain.CurrentDomain.GetAssemblies().SingleOrDefault(assembly => assembly.GetName().Name == reference.Name);
+                if(referencedAsm!=null && references.FirstOrDefault(x => x.Display == referencedAsm.Location)==null)
+                references.Add(MetadataReference.CreateFromFile(referencedAsm.Location));
+   
+            }
+
+    
 
             //Prepare to compile
             CSharpCompilation compilation = CSharpCompilation.Create(
