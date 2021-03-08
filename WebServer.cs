@@ -43,7 +43,7 @@ namespace RestServiceProvider
         }
 
 
-        public void RegisterApi(object Api)
+        public void RegisterApi(object Api, string ApiPrefix="")
         {
             CodeGen gen = new CodeGen();
             var asm = gen.BuildServiceProviderInstance(Api);
@@ -59,12 +59,12 @@ namespace RestServiceProvider
                 //cast it to required type
                 var castedDelegate = (Func<Dictionary<string, string>, string, string>)_delegate;
                 //register it
-                requestDispatcher.RegisterMethod(MethodName, castedDelegate);
+                requestDispatcher.RegisterMethod(string.IsNullOrEmpty(ApiPrefix)? MethodName: ApiPrefix+"/"+MethodName, castedDelegate);
             }
         }
 
 
-        public void Start()
+        public void Start(uint port=5000)
         {
             if (StopTokenSouce != null) return;
             StopTokenSouce = new CancellationTokenSource();
@@ -73,7 +73,7 @@ namespace RestServiceProvider
             host = new WebHostBuilder()
                     .UseKestrel()
                     .ConfigureServices(services => { services.AddSingleton<IStartup>(startup); })
-                    .UseUrls("http://0.0.0.0:5000/")
+                    .UseUrls($"http://0.0.0.0:{port}/")
                     .Build();
 
             host.StartAsync(StopTokenSouce.Token);
