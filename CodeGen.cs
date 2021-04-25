@@ -80,6 +80,8 @@ namespace RestServiceProvider
                 case "String":
                 case "string":
                     return "ToString";
+                case "DateTime":
+                    return "ToDateTime";
 
                 default:
                     throw new Exception($"Usupported type: {t.Name}");
