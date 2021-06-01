@@ -82,10 +82,10 @@ namespace RestServiceProvider
                     return "ToString";
                 case "DateTime":
                     return "ToDateTime";
-
                 default:
-                    throw new Exception($"Usupported type: {t.Name}");
+                    return $"JsonConvert.DerializeObject<{t.Name}>";
             }
+
         }
 
         /// <summary>
@@ -126,7 +126,7 @@ namespace RestServiceProvider
                .Parameter(SyntaxFactory.Identifier("o"))
                .WithType(SyntaxFactory.IdentifierName("object"));
             var ctorParamList = SyntaxFactory.SeparatedList<ParameterSyntax>();
-            ctorParamList=ctorParamList.Add(ctorParams);
+            ctorParamList = ctorParamList.Add(ctorParams);
 
             List<StatementSyntax> ctorStatements = new List<StatementSyntax>();
             ctorStatements.Add(SyntaxFactory.ParseStatement($"c=({T.Namespace}.{T.Name})o;"));
@@ -137,7 +137,7 @@ namespace RestServiceProvider
                 .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword))
                 .WithBody(ctorBody);
 
-            cd=cd.AddMembers(ctor);
+            cd = cd.AddMembers(ctor);
 
             #endregion
 
@@ -152,13 +152,17 @@ namespace RestServiceProvider
 
             #region Methods
 
+
             //Map all  mehods to their methods in original class
-            foreach (MethodInfo v in T.GetMethods())
+            foreach (string MethodName in T.GetMethods().Select(x => x.Name).Distinct())
             {
-                if (v.Module != T.Module) continue;// exclude  ToString, GetHashCode...
-                var methodSource = CreateMethodSource(v);
+                // Method may be overloaded, so we select all methods by name
+                // exclude  ToString, GetHashCode by module.
+                var Methods = T.GetMethods().Where(x => x.Name == MethodName && x.Module == T.Module).ToList();
+                if (Methods.Count == 0) continue;
+                var methodSource = CreateMethodSource(Methods);
                 cd = cd.AddMembers(methodSource);
-                MethodNames.Add(v.Name);
+                MethodNames.Add(MethodName);
             }
             #endregion
 
@@ -195,38 +199,63 @@ namespace RestServiceProvider
         /// <param name="name"></param>
         /// <param name="parameters"></param>
         /// <returns></returns>
-        public MethodDeclarationSyntax CreateMethodSource(MethodInfo v)
+        public MethodDeclarationSyntax CreateMethodSource(List<MethodInfo> Methods)
         {
-            string name = v.Name;
-            var parameters = v.GetParameters();
+            string name = Methods[0].Name;
             List<StatementSyntax> MethodStatements = new List<StatementSyntax>();
+
+            //I assume that method may be simple or overloaded.
+            //I assume that post request has NO parameters in URL, only serialized json data in body 
+            //If method is overloaded then I assume that only two overloads exist and at least one of them has a single parameter, and this parameter is custom class.
+            //Assumptions above were made to satisfy mapping of GET and POST requests.
 
             #region MethodBody
             StringBuilder sb = new StringBuilder();
-            if (v.ReturnType.Name != "Void")
+            MethodInfo m1 = null;
+            MethodInfo m2 = null;
+
+            if (Methods.Count > 2) throw new Exception("Ambigious method definition, max 2 overloads currently supported - " + Methods[0].Name);
+            bool overload = Methods.Count > 1;
+            if (Methods.Count == 1)
             {
-                sb.Append(" return JsonConvert.SerializeObject(c.");
-                sb.Append(name);
-                sb.Append("(");
-                foreach (var p in parameters)
-                    sb.Append($"Convert.{ConvertSelect(p.ParameterType)}(parameters.GetValueOrDefault(\"{p.Name}\")),");
-                if (parameters.Length > 0) sb.Length--;//Chew last comma
-                sb.Append("));");
-                MethodStatements.Add(SyntaxFactory.ParseStatement(sb.ToString()));
+                m1 = Methods[0];
             }
             else
             {
-                sb.Append("c.");
-                sb.Append(name);
-                sb.Append("();");
-                MethodStatements.Add(SyntaxFactory.ParseStatement(sb.ToString()));
-                sb.Clear();
-                //void method;
-                sb.Append("return \"Call success, no return value\";");
-                MethodStatements.Add(SyntaxFactory.ParseStatement(sb.ToString()));
+                //Try to find method with single parameter. Parameter must be a class from same module.
+                m2 = Methods.FirstOrDefault(x => x.GetParameters().Count() == 1 && x.GetParameters()[0].ParameterType.Module == Methods[0].Module);
+                if (m2 == null) throw new Exception($"Ambigious method definition '{Methods[0].Name}': Unable to find method that fits POST request. Method must have single parameter. Parameter must be a class from same module");
+                m1 = Methods.FirstOrDefault(x => x != m2);
             }
 
 
+            if (overload)
+            {
+                sb.Append("if (!String.IsNullOrEmpty(body))");
+                if (m2.ReturnType.Name == "Void")
+                    sb.Append("c.");
+                else
+                    sb.Append(" return JsonConvert.SerializeObject(c.");
+                sb.Append(name);
+                sb.Append("(JsonConvert.DeserializeObject<");
+                sb.Append(m2.GetParameters().First().ParameterType.Name);
+                sb.Append(">(body))); else");
+            }
+
+            if (m1.ReturnType.Name == "Void")
+                sb.Append("c.");
+            else
+                sb.Append(" return JsonConvert.SerializeObject(c.");
+            sb.Append(name);
+            sb.Append("(");
+            foreach (var p in m1.GetParameters())
+                sb.Append($"Convert.{ConvertSelect(p.ParameterType)}(parameters.GetValueOrDefault(\"{p.Name}\")),");
+            if (m1.GetParameters().Length > 0) sb.Length--;//Chew last comma
+            sb.Append("));");
+
+            if (m1.ReturnType.Name == "Void") sb.Append("return \"Call success, no return value\";");
+
+            MethodStatements.Add(SyntaxFactory.ParseStatement(sb.ToString()));
             var MethodBody = SyntaxFactory.Block(MethodStatements);
             #endregion
 
@@ -257,9 +286,7 @@ namespace RestServiceProvider
                                    .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword))
                                    .WithParameterList(MethodParams)
                                    .WithBody(MethodBody);
-
             return methodDeclaration;
-
         }
 
 
@@ -290,20 +317,20 @@ namespace RestServiceProvider
             references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Threading.Tasks").Location));
             references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Collections").Location));
             references.Add(MetadataReference.CreateFromFile(typeof(string).GetTypeInfo().Assembly.Location));
-      
+
 
             //Adds reference to our original class from which we create service
             references.Add(MetadataReference.CreateFromFile(TypeToWrap.Assembly.Location));
 
-            foreach(var reference in TypeToWrap.Assembly.GetReferencedAssemblies())
+            foreach (var reference in TypeToWrap.Assembly.GetReferencedAssemblies())
             {
                 var referencedAsm = AppDomain.CurrentDomain.GetAssemblies().SingleOrDefault(assembly => assembly.GetName().Name == reference.Name);
-                if(referencedAsm!=null && references.FirstOrDefault(x => x.Display == referencedAsm.Location)==null)
-                references.Add(MetadataReference.CreateFromFile(referencedAsm.Location));
-   
+                if (referencedAsm != null && references.FirstOrDefault(x => x.Display == referencedAsm.Location) == null)
+                    references.Add(MetadataReference.CreateFromFile(referencedAsm.Location));
+
             }
 
-    
+
 
             //Prepare to compile
             CSharpCompilation compilation = CSharpCompilation.Create(

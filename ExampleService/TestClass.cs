@@ -81,6 +81,15 @@ namespace ExampleService
 
         }
 
+        public Instrument Instrument(string Symbol)
+        {
+            return new Instrument() { Symbol = Symbol, FaceValue = 1000 };
+        }
+
+        public Instrument Instrument(Instrument i)
+        {
+            return new Instrument() { Symbol = i.Symbol, FaceValue = i.FaceValue };
+        }
 
     }
 
